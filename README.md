@@ -15,7 +15,7 @@
 - **dns_trace**: DNS 查询/响应解析
 - **tls_trace**: HTTPS/TLS 明文捕获 (OpenSSL/BoringSSL/GnuTLS)
 - **http2_trace**: HTTP/2 帧级解析 + HPACK 解压
-- **db_trace**: MySQL/Redis/Kafka/Dubbo 协议解析
+- **db_trace**: MySQL/Redis/Kafka/Dubbo 协议自动识别
 
 ### 性能分析
 - **on_cpu**: CPU 调度分析
@@ -25,13 +25,13 @@
 
 ### 安全监控
 - **security_trace**: 安全事件采集
-- **log_collect**: 应用日志采集 (零侵入)
+- **log_collect**: 应用日志采集 (零侵入, 拦截 write/writev)
 
 ### 平台集成
-- **kubernetes**: K8s 元数据关联 (DaemonSet)
+- **kubernetes**: K8s 元数据关联 (DaemonSet 部署)
 - **cloud_metadata**: 阿里云/华为云/AWS/GCP/Azure 元数据采集
-- **vtap**: 流量镜像/转发
-- **pingtrace**: 网络路径追踪
+- **vtap**: 流量镜像 (pcap 存储 + UDP 转发)
+- **pingtrace**: 网络路径追踪 (类 traceroute)
 
 ## 快速开始
 
@@ -85,19 +85,52 @@ EDGE_ADDR=192.168.1.100:9102 sudo -E ./build/ebpf-probe
 probe_id: "node-probe"
 interface: "eth0"
 
+# 采集器开关
 collectors:
   network_flow: true
   tcp_connect: true
+  host_metrics: true
   http_trace: true
+  dns_trace: true
   tls_trace: true
   http2_trace: true
   l7_sniffer: true
+  log_collect: false
+  syscall: true
 
+# HTTPS 配置
+tls:
+  enabled: true
+  libraries: [openssl, boringssl, gnutls]
+
+# L7 协议嗅探
+sniffer:
+  enabled: true
+  protocols: [mysql, redis, kafka, dubbo]
+  port_override:
+    3306: mysql
+    6379: redis
+    9092: kafka
+    20880: dubbo
+
+# Kubernetes 配置
 kubernetes:
   enabled: true
   mode: "incluster"
   enrich_events: true
 
+# vTap 流量镜像
+vtap:
+  enabled: false
+  mode: "capture"          # capture | receiver
+  interface: any
+  target_ip: 172.30.1.238
+  target_port: 9800
+  write_enabled: true
+  write_path: /data/pcap
+  write_expires: 72h
+
+# 数据输出
 edge_addr: "localhost:9102"
 clickhouse_addr: "localhost"
 ```
@@ -108,11 +141,36 @@ clickhouse_addr: "localhost"
 # 创建命名空间
 kubectl create namespace cloudflow-system
 
-# 应用 RBAC
+# 应用 DaemonSet
 kubectl apply -f deploy/k8s/daemonset.yaml
 
 # 验证部署
-kubectl get pods -n cloudflow-system
+kubectl get pods -n cloudflow-system -l app=cloudflow-ebpf-probe
+kubectl logs -n cloudflow-system -l app=cloudflow-ebpf-probe -f
+```
+
+## vTap 流量镜像
+
+vTap 支持两种模式:
+
+**Capture 模式** (被监控节点):
+```yaml
+vtap:
+  mode: capture
+  interface: eth0
+  target_ip: 172.30.1.238
+  target_port: 9800
+```
+
+**Receiver 模式** (汇聚节点):
+```yaml
+vtap:
+  mode: receiver
+  ip: 0.0.0.0
+  port: 9800
+  out_interface: Eth3      # 输出到网卡, none=不输出
+  write_enabled: true
+  write_path: /data/pcap
 ```
 
 ## 内核兼容性
@@ -138,19 +196,48 @@ kubectl get pods -n cloudflow-system
 
 ```
 ebpf-probe/
-├── bpf/                    # 内核态 eBPF 程序
-├── cmd/probe/              # 主入口
+├── bpf/                          # 内核态 eBPF 程序
+│   ├── common.h                  # 公共定义
+│   ├── tls_trace.bpf.c           # HTTPS/SSL uprobe
+│   ├── http2_trace.bpf.c         # HTTP/2 帧级探针
+│   ├── l7_sniffer.bpf.c          # L7 协议嗅探
+│   └── log_collect.bpf.c         # 日志采集
+├── cmd/probe/main.go             # 主入口
 ├── internal/
-│   ├── collector/          # 采集器实现
-│   ├── kernel/             # 内核能力检测
-│   ├── k8s/                # Kubernetes 集成
-│   └── output/             # 数据输出
+│   ├── collector/                # 采集器实现
+│   │   ├── manager.go            # 生命周期管理
+│   │   ├── tls_trace.go          # HTTPS 采集器
+│   │   ├── http2_trace.go        # HTTP/2 采集器
+│   │   ├── log_collect.go        # 日志采集
+│   │   ├── vtap.go               # 流量镜像
+│   │   ├── pingtrace.go          # 网络路径追踪
+│   │   ├── cloud_metadata.go     # 云平台元数据
+│   │   └── docker.go             # 容器映射
+│   ├── kernel/detector.go        # 内核能力检测
+│   ├── k8s/                      # Kubernetes 集成
+│   │   ├── client.go             # API 客户端
+│   │   └── enricher.go           # 事件增强
+│   └── output/                   # 数据输出
+│       ├── edge.go               # Edge HTTP 上报
+│       ├── clickhouse.go         # ClickHouse 直写
+│       └── multi.go              # 多输出聚合
 ├── pkg/
-│   ├── offset/             # 内核偏移量
-│   ├── perf/               # 性能分析器
-│   └── protocol/           # 协议解析器
-├── config/                 # 配置文件
-└── deploy/                 # 部署配置
+│   ├── protocol/                 # 协议解析器
+│   │   ├── sniffer.go            # L7 嗅探框架
+│   │   ├── https.go              # TLS 解析
+│   │   ├── http2.go              # HTTP/2 + HPACK
+│   │   ├── mysql.go              # MySQL
+│   │   ├── redis.go              # Redis
+│   │   ├── kafka.go              # Kafka
+│   │   └── dubbo.go              # Dubbo
+│   ├── perf/analyzer.go          # 性能分析器
+│   └── offset/                   # 内核偏移量
+│       ├── detector.go           # BTF/预编译/手动
+│       └── offsets/              # 预编译偏移量表
+├── config/config.yaml            # 配置文件
+├── deploy/k8s/daemonset.yaml     # K8s 部署
+├── Makefile
+└── go.mod
 ```
 
 ## 许可证
