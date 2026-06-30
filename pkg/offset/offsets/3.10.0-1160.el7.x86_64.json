@@ -1,0 +1,53 @@
+{
+  "kernel_version": "3.10.0-1160.el7.x86_64",
+  "task_struct": {
+    "files": 1768,
+    "cgroups": 2080,
+    "pid": 1248,
+    "tgid": 1252,
+    "fdt": 32,
+    "private_data": 168
+  },
+  "sock": {
+    "sk_flags": 472,
+    "sk_protocol": 488,
+    "sk_type": 488
+  },
+  "sock_common": {
+    "skc_family": 16,
+    "skc_state": 18
+  },
+  "socket": {
+    "file": 24,
+    "sk": 32
+  },
+  "tcp_sock": {
+    "copied_seq": 1400,
+    "write_seq": 1720,
+    "retrans_out": 1600,
+    "total_retrans": 2000,
+    "advmss": 1528,
+    "srtt_us": 1568,
+    "snd_wnd": 1496,
+    "rcv_wnd": 1716,
+    "snd_cwnd": 1656,
+    "lost_out": 1736
+  },
+  "cgroup": {
+    "path": 0,
+    "d_name": 0
+  },
+  "sk_buff": {
+    "network_header": 168,
+    "head": 180
+  },
+  "request": {
+    "cmd_flags": 0,
+    "data_len": 0,
+    "sector": 0,
+    "rq_disk": 0,
+    "start_time_ns": 0,
+    "io_start_time_ns": 0,
+    "disk": 0
+  }
+}

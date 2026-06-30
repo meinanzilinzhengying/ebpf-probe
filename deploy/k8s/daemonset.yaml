@@ -1,0 +1,209 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cloudflow-ebpf-probe
+  namespace: cloudflow-system
+  labels:
+    app: cloudflow-ebpf-probe
+spec:
+  selector:
+    matchLabels:
+      app: cloudflow-ebpf-probe
+  template:
+    metadata:
+      labels:
+        app: cloudflow-ebpf-probe
+    spec:
+      serviceAccountName: cloudflow-ebpf-probe
+      tolerations:
+        - operator: Exists  # 容忍所有污点，确保每个节点都部署
+      hostNetwork: true     # 需要访问宿主机网络
+      containers:
+        - name: ebpf-probe
+          image: cloudflow/ebpf-probe:latest
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true  # eBPF 需要特权模式
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - NET_ADMIN
+                - PERFMON
+          env:
+            - name: EDGE_ADDR
+              value: "cloudflow-edge.cloudflow-system:9102"
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: CLICKHOUSE_ADDR
+              value: "clickhouse.cloudflow-system:9000"
+            - name: LOG_LEVEL
+              value: "info"
+          volumeMounts:
+            - name: sys-kernel
+              mountPath: /sys/kernel
+            - name: sys-btf
+              mountPath: /sys/kernel/btf
+              readOnly: true
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: sys-debug
+              mountPath: /sys/kernel/debug
+              readOnly: true
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9091
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9091
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: sys-kernel
+          hostPath:
+            path: /sys/kernel
+        - name: sys-btf
+          hostPath:
+            path: /sys/kernel/btf
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: sys-debug
+          hostPath:
+            path: /sys/kernel/debug
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudflow-ebpf-probe
+  namespace: cloudflow-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudflow-ebpf-probe
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "namespaces", "services", "endpoints", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/status"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cloudflow-ebpf-probe
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cloudflow-ebpf-probe
+subjects:
+  - kind: ServiceAccount
+    name: cloudflow-ebpf-probe
+    namespace: cloudflow-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflow-ebpf-probe-config
+  namespace: cloudflow-system
+data:
+  config.yaml: |
+    probe_id: "node-probe"
+    interface: "eth0"
+    api_port: "9091"
+    
+    collectors:
+      network_flow: true
+      process_exec: true
+      tcp_connect: true
+      host_metrics: true
+      syscall: true
+      http_trace: true
+      dns_trace: true
+      tls_trace: true
+      http2_trace: true
+      log_collect: false
+      l7_sniffer: true
+    
+    tls:
+      enabled: true
+      libraries:
+        - openssl
+        - boringssl
+        - gnutls
+      capture_handshake: true
+    
+    http2:
+      enabled: true
+      decode_hpack: true
+    
+    sniffer:
+      enabled: true
+      protocols:
+        - mysql
+        - redis
+        - kafka
+        - dubbo
+    
+    kubernetes:
+      enabled: true
+      mode: "incluster"
+      enrich_events: true
+    
+    log_level: "info"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudflow-ebpf-probe
+  namespace: cloudflow-system
+spec:
+  selector:
+    app: cloudflow-ebpf-probe
+  ports:
+    - name: api
+      port: 9091
+      targetPort: 9091
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+  clusterIP: None  # Headless Service

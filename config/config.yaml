@@ -1,0 +1,104 @@
+# CloudFlow eBPF Probe 配置文件
+
+# 探针标识
+probe_id: "node-probe"
+
+# 监听网口
+interface: "eth0"
+
+# API 端口
+api_port: "9091"
+
+# ClickHouse 配置
+clickhouse_addr: "localhost"
+clickhouse_user: "default"
+clickhouse_password: ""
+clickhouse_database: "cloudflow"
+
+# Edge 上报配置
+edge_addr: "localhost:9102"
+
+# 采集器配置
+collectors:
+  # P0 核心采集器
+  network_flow: true
+  process_exec: true
+  file_open: false
+  tcp_connect: true
+  host_metrics: true
+
+  # P1 扩展采集器
+  syscall: true
+  http_trace: true
+  dns_trace: true
+  db_trace: false
+  sched_trace: false
+  mem_trace: false
+  block_trace: false
+  security_trace: false
+
+  # 新增采集器 (Cloud-Metrics 功能)
+  tls_trace: true
+  http2_trace: true
+  log_collect: false
+  l7_sniffer: true
+
+# TLS/HTTPS 配置
+tls:
+  enabled: true
+  libraries:
+    - openssl
+    - boringssl
+    - gnutls
+  capture_handshake: true
+
+# HTTP/2 配置
+http2:
+  enabled: true
+  decode_hpack: true
+
+# L7 协议嗅探配置
+sniffer:
+  enabled: true
+  protocols:
+    - mysql
+    - redis
+    - kafka
+    - dubbo
+  port_override:
+    3306: mysql
+    6379: redis
+    9092: kafka
+    20880: dubbo
+
+# 日志采集配置
+log_collect:
+  enabled: false
+  buffer_size: 4096
+  max_line_length: 8192
+  filter_patterns: []
+
+# Kubernetes 配置
+kubernetes:
+  enabled: true
+  mode: "incluster"          # incluster | kubeconfig
+  api_server: ""             # incluster 模式下自动获取
+  token_path: ""             # 默认使用 /var/run/secrets/kubernetes.io/serviceaccount/token
+  namespace_filter: ""       # 只采集指定 namespace，空表示全部
+  pod_label_selector: ""     # Pod 标签过滤
+  node_name: ""              # 从环境变量 NODE_NAME 获取
+  enrich_events: true        # 是否增强事件添加 K8s 标签
+
+# 内核偏移量配置
+offsets:
+  mode: "auto"               # auto | embedded | manual
+  manual_path: ""            # 手动配置文件路径
+
+# 过滤配置
+filters:
+  ignore_loopback: true
+  ignore_ports: []
+  ignore_ips: []
+
+# 日志级别
+log_level: "info"
